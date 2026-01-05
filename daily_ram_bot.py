@@ -1,24 +1,20 @@
+import cloudscraper
 import requests
 from bs4 import BeautifulSoup
 import json
 import os
 import sys
-
 PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=25,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1"
-
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
 except KeyError:
     print("Error: DISCORD_WEBHOOK environment variable not set.")
     sys.exit(1)
-
 def get_cheapest_ram():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    scraper = cloudscraper.create_scraper()
     
     try:
-        response = requests.get(PCPP_URL, headers=headers)
+        response = scraper.get(PCPP_URL)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, "html.parser")
@@ -28,7 +24,6 @@ def get_cheapest_ram():
         if not product_list:
             print("Error: Could not find product list. PCPartPicker layout may have changed or no items match filters.")
             return None
-
         top_item = product_list[0]
         
         name_element = top_item.select_one("div.td__name a")
@@ -45,7 +40,6 @@ def get_cheapest_ram():
     except Exception as e:
         print(f"Scraping Error: {e}")
         return None
-
 def post_to_discord(item):
     if not item:
         return
@@ -80,7 +74,6 @@ def post_to_discord(item):
         print("Success: Posted to Discord.")
     except requests.exceptions.RequestException as e:
         print(f"Discord Error: {e}")
-
 if __name__ == "__main__":
     print("Fetching data...")
     deal = get_cheapest_ram()
