@@ -13,28 +13,31 @@ except KeyError as e:
     sys.exit(1)
 
 def get_cheapest_ram():
-    api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={PCPP_URL}"
+    # FIXED: Added &render=true so the proxy runs the JavaScript to load the table
+    api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={PCPP_URL}&render=true"
     
     try:
+        print("Contacting ScraperAPI (with JS Rendering)...")
+        # Increased timeout to 60s because rendering JS takes a few extra seconds
         response = requests.get(api_url, timeout=60)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, "html.parser")
         
-        print("DEBUG: Page title:", soup.title.string if soup.title else "No title")
-        print("DEBUG: First 500 chars of body:", str(soup.body)[:500] if soup.body else "No body")
-        
+        # Select the product rows
         product_list = soup.select("tr.tr__product")
-        print(f"DEBUG: Found {len(product_list)} products")
         
         if not product_list:
-            print("Error: Could not find product list.")
+            print("Error: Product list is still empty.")
             return None
 
         top_item = product_list[0]
+        
         name_element = top_item.select_one("div.td__name a")
         name = name_element.get_text(strip=True)
+        
         link = "https://ca.pcpartpicker.com" + name_element["href"]
+        
         price_element = top_item.select_one("td.td__price")
         price = price_element.get_text(strip=True)
         
@@ -45,8 +48,6 @@ def get_cheapest_ram():
 
     except Exception as e:
         print(f"Scraping Error: {e}")
-        import traceback
-        traceback.print_exc()
         return None
 
 def post_to_discord(item):
