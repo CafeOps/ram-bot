@@ -1,0 +1,25 @@
+name: Daily RAM Check
+
+on:
+  schedule:
+    - cron: '0 14 * * *' # Runs at 2:00 PM UTC every day
+  workflow_dispatch:      # Allows manual testing
+
+jobs:
+  run_script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+          
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+        
+      - name: Run script
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python daily_ram_bot.py
