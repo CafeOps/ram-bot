@@ -1,45 +1,46 @@
-import cloudscraper
+from curl_cffi import requests as crequests
 import requests
 from bs4 import BeautifulSoup
 import json
 import os
 import sys
+
 PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=25,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1"
+
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
 except KeyError:
     print("Error: DISCORD_WEBHOOK environment variable not set.")
     sys.exit(1)
+
 def get_cheapest_ram():
-    scraper = cloudscraper.create_scraper()
-    
     try:
-        response = scraper.get(PCPP_URL)
+        response = crequests.get(PCPP_URL, impersonate="chrome124")
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, "html.parser")
-        
         product_list = soup.select("tr.tr__product")
         
         if not product_list:
-            print("Error: Could not find product list. PCPartPicker layout may have changed or no items match filters.")
+            print("Error: Could not find product list.")
             return None
+
         top_item = product_list[0]
-        
         name_element = top_item.select_one("div.td__name a")
         name = name_element.get_text(strip=True)
-        
         link = "https://ca.pcpartpicker.com" + name_element["href"]
-        
         price_element = top_item.select_one("td.td__price")
         price = price_element.get_text(strip=True)
         
         if not price:
             price = "Check Link (Price not scraped)"
+
         return {"name": name, "price": price, "url": link}
+
     except Exception as e:
         print(f"Scraping Error: {e}")
         return None
+
 def post_to_discord(item):
     if not item:
         return
@@ -74,6 +75,7 @@ def post_to_discord(item):
         print("Success: Posted to Discord.")
     except requests.exceptions.RequestException as e:
         print(f"Discord Error: {e}")
+
 if __name__ == "__main__":
     print("Fetching data...")
     deal = get_cheapest_ram()
