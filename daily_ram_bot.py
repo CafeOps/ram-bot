@@ -1,7 +1,5 @@
-from curl_cffi import requests as crequests
 import requests
 from bs4 import BeautifulSoup
-import json
 import os
 import sys
 
@@ -9,13 +7,16 @@ PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=25,300&S=6000,9600&X=
 
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
-except KeyError:
-    print("Error: DISCORD_WEBHOOK environment variable not set.")
+    SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
+except KeyError as e:
+    print(f"Error: {e} environment variable not set.")
     sys.exit(1)
 
 def get_cheapest_ram():
+    api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={PCPP_URL}"
+    
     try:
-        response = crequests.get(PCPP_URL, impersonate="chrome124")
+        response = requests.get(api_url, timeout=60)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, "html.parser")

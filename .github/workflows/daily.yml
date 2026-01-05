@@ -15,9 +15,10 @@ jobs:
           python-version: '3.x'
           
       - name: Install dependencies
-        run: pip install curl_cffi beautifulsoup4 requests
+        run: pip install beautifulsoup4 requests
         
       - name: Run script
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python daily_ram_bot.py
