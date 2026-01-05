@@ -22,7 +22,6 @@ def get_cheapest_ram(max_retries=3):
         "device_type": "desktop",
     }
 
-    # --- RETRY LOOP (Handles 500 Errors/Timeouts) ---
     for attempt in range(max_retries):
         try:
             print(f"Contacting ScraperAPI (attempt {attempt + 1}/{max_retries})...")
@@ -44,24 +43,40 @@ def get_cheapest_ram(max_retries=3):
                 time.sleep(5)
                 continue
 
-            # --- SMART PRODUCT LOOP (Handles Bad Rows) ---
-            # We loop through the rows to find the first ACTUAL product
-            for item in product_list:
+            # --- "LAZY" PARSING LOOP ---
+            for i, item in enumerate(product_list):
                 try:
-                    name_element = item.select_one("div.td__name a")
-                    price_element = item.select_one("td.td__price")
+                    # 1. NAME: Just grab the first link in the row
+                    name_element = item.find("a")
                     
-                    if not name_element or not price_element:
+                    # 2. PRICE: Look for any text in the row that has a '$'
+                    price = None
+                    for text in item.stripped_strings:
+                        if "$" in text and "Price" not in text:
+                            price = text
+                            break
+                    
+                    # --- DEBUGGING IF FAILS ---
+                    # If this is the first row and we missed data, dump the HTML so we can see it!
+                    if i == 0 and (not name_element or not price):
+                        print("\n--- DEBUG: RAW HTML OF ROW 0 ---")
+                        print(item.prettify())
+                        print("--------------------------------\n")
+
+                    if not name_element or not price:
                         continue
 
                     name = name_element.get_text(strip=True)
-                    link = "https://ca.pcpartpicker.com" + name_element["href"]
-                    price = price_element.get_text(strip=True)
-                    
-                    if not price or "Price" in price:
-                        continue
+                    # Handle relative links
+                    href = name_element["href"]
+                    if href.startswith("/"):
+                        link = "https://ca.pcpartpicker.com" + href
+                    else:
+                        link = href
 
+                    # Success!
                     return {"name": name, "price": price, "url": link}
+
                 except Exception:
                     continue
             
