@@ -20,7 +20,12 @@ def get_cheapest_ram():
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, "html.parser")
+        
+        print("DEBUG: Page title:", soup.title.string if soup.title else "No title")
+        print("DEBUG: First 500 chars of body:", str(soup.body)[:500] if soup.body else "No body")
+        
         product_list = soup.select("tr.tr__product")
+        print(f"DEBUG: Found {len(product_list)} products")
         
         if not product_list:
             print("Error: Could not find product list.")
@@ -40,6 +45,8 @@ def get_cheapest_ram():
 
     except Exception as e:
         print(f"Scraping Error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def post_to_discord(item):
