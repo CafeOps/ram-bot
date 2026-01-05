@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import os
 import sys
 
-# Target URL
+# Your Filter URL
 PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=25,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1"
 
 # Load Secrets
@@ -15,18 +15,22 @@ except KeyError as e:
     sys.exit(1)
 
 def get_cheapest_ram():
-    # --- CRITICAL FIXES ---
-    # render=true: Run JavaScript
-    # wait_for_selector=.tr__product: Wait until the product table actually appears
-    # device_type=desktop: Force desktop view (ensures table structure is used)
-    api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={PCPP_URL}&render=true&wait_for_selector=.tr__product&device_type=desktop"
+    # --- FIX: USE PARAMS DICT ---
+    # This automatically URL-encodes the special characters (&, #) in your link
+    # so ScraperAPI receives the full, valid URL.
+    payload = {
+        'api_key': SCRAPER_API_KEY,
+        'url': PCPP_URL,
+        'render': 'true',                 # Force JS rendering
+        'wait_for_selector': '.tr__product', # Wait for the table row to appear
+        'device_type': 'desktop',         # Force desktop view
+    }
     
     try:
-        print("Contacting ScraperAPI (Waiting for table data)...")
-        # Give it plenty of time (60s) to render
-        response = requests.get(api_url, timeout=60)
+        print("Contacting ScraperAPI...")
+        # passing 'params=payload' handles the encoding magic
+        response = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
         
-        # Debug: Print status code
         print(f"DEBUG: Status Code: {response.status_code}")
         response.raise_for_status()
         
@@ -34,11 +38,14 @@ def get_cheapest_ram():
         
         # Select the product rows
         product_list = soup.select("tr.tr__product")
+        print(f"DEBUG: Found {len(product_list)} products.")
         
         if not product_list:
             print("Error: Product list is empty.")
-            # If it fails, print the title to see if we got a CAPTCHA or error page
-            print("DEBUG Page Title:", soup.title.string.strip() if soup.title else "No Title")
+            print("--- DEBUG: HTML DUMP (First 2000 chars) ---")
+            # If this prints, copy-paste it to me!
+            print(soup.prettify()[:2000])
+            print("-------------------------------------------")
             return None
 
         # --- SUCCESS LOGIC ---
@@ -97,7 +104,7 @@ def post_to_discord(item):
         print(f"Discord Error: {e}")
 
 if __name__ == "__main__":
-    print("Fetching data...")
+    print("Starting Bot...")
     deal = get_cheapest_ram()
     
     if deal:
