@@ -13,43 +13,47 @@ except KeyError as e:
     sys.exit(1)
 
 def get_cheapest_ram():
+    # --- UPDATED PAYLOAD ---
+    # Removed 'wait_for_selector' to prevent 500 Timeouts.
+    # Added 'country_code' to match the Canadian domain.
     payload = {
         'api_key': SCRAPER_API_KEY,
         'url': PCPP_URL,
-        'render': 'true',
-        'wait_for_selector': '.tr__product',
+        'render': 'true', 
+        'country_code': 'ca', 
         'device_type': 'desktop',
     }
-
+    
     try:
         print("Contacting ScraperAPI...")
         response = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
-
+        
         print(f"DEBUG: Status Code: {response.status_code}")
         response.raise_for_status()
-
+        
         soup = BeautifulSoup(response.content, "html.parser")
-
+        
         product_list = soup.select("tr.tr__product")
         print(f"DEBUG: Found {len(product_list)} products.")
-
+        
         if not product_list:
             print("Error: Product list is empty.")
-            print("--- DEBUG: HTML DUMP (First 2000 chars) ---")
-            print(soup.prettify()[:2000])
-            print("-------------------------------------------")
+            # IMPORTANT: This will print what the bot actually sees.
+            print("--- DEBUG: HTML DUMP (First 500 chars) ---")
+            print(soup.prettify()[:500])
+            print("------------------------------------------")
             return None
 
         top_item = product_list[0]
-
+        
         name_element = top_item.select_one("div.td__name a")
         name = name_element.get_text(strip=True)
-
+        
         link = "https://ca.pcpartpicker.com" + name_element["href"]
-
+        
         price_element = top_item.select_one("td.td__price")
         price = price_element.get_text(strip=True)
-
+        
         if not price:
             price = "Check Link (Price not scraped)"
 
@@ -62,14 +66,14 @@ def get_cheapest_ram():
 def post_to_discord(item):
     if not item:
         return
-
+    
     payload = {
         "username": "RAM Bot",
         "embeds": [
             {
                 "title": "Daily RAM Deal (32GB DDR5 6000+ CL30)",
                 "description": f"The current cheapest kit on PCPartPicker (CA).",
-                "color": 5814783,
+                "color": 5814783, 
                 "fields": [
                     {
                         "name": "Product",
@@ -86,7 +90,7 @@ def post_to_discord(item):
             }
         ]
     }
-
+    
     try:
         result = requests.post(WEBHOOK_URL, json=payload)
         result.raise_for_status()
@@ -97,7 +101,7 @@ def post_to_discord(item):
 if __name__ == "__main__":
     print("Starting Bot...")
     deal = get_cheapest_ram()
-
+    
     if deal:
         print(f"Found: {deal['name']} @ {deal['price']}")
         post_to_discord(deal)
