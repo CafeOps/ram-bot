@@ -3,8 +3,10 @@ from bs4 import BeautifulSoup
 import os
 import sys
 
+# Target URL
 PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=25,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1"
 
+# Load Secrets
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
     SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
@@ -13,13 +15,19 @@ except KeyError as e:
     sys.exit(1)
 
 def get_cheapest_ram():
-    # FIXED: Added &render=true so the proxy runs the JavaScript to load the table
-    api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={PCPP_URL}&render=true"
+    # --- CRITICAL FIXES ---
+    # render=true: Run JavaScript
+    # wait_for_selector=.tr__product: Wait until the product table actually appears
+    # device_type=desktop: Force desktop view (ensures table structure is used)
+    api_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={PCPP_URL}&render=true&wait_for_selector=.tr__product&device_type=desktop"
     
     try:
-        print("Contacting ScraperAPI (with JS Rendering)...")
-        # Increased timeout to 60s because rendering JS takes a few extra seconds
+        print("Contacting ScraperAPI (Waiting for table data)...")
+        # Give it plenty of time (60s) to render
         response = requests.get(api_url, timeout=60)
+        
+        # Debug: Print status code
+        print(f"DEBUG: Status Code: {response.status_code}")
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, "html.parser")
@@ -28,9 +36,12 @@ def get_cheapest_ram():
         product_list = soup.select("tr.tr__product")
         
         if not product_list:
-            print("Error: Product list is still empty.")
+            print("Error: Product list is empty.")
+            # If it fails, print the title to see if we got a CAPTCHA or error page
+            print("DEBUG Page Title:", soup.title.string.strip() if soup.title else "No Title")
             return None
 
+        # --- SUCCESS LOGIC ---
         top_item = product_list[0]
         
         name_element = top_item.select_one("div.td__name a")
