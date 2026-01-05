@@ -3,8 +3,12 @@ from bs4 import BeautifulSoup
 import os
 import sys
 import time
+import json
+from datetime import datetime
 
+# Your Filter URL
 PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=25,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1"
+HISTORY_FILE = "price_history.json"
 
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
@@ -28,7 +32,6 @@ def get_cheapest_ram(max_retries=3):
             response = requests.get("https://api.scraperapi.com/", params=payload, timeout=90)
             
             if response.status_code == 500:
-                print(f"ScraperAPI 500 error. Retrying...")
                 time.sleep(5)
                 continue
             
@@ -36,74 +39,96 @@ def get_cheapest_ram(max_retries=3):
 
             soup = BeautifulSoup(response.text, "html.parser")
             product_list = soup.select("tr.tr__product")
-            print(f"DEBUG: Found {len(product_list)} products.")
             
             if not product_list:
-                print("Error: Product list is empty. Retrying...")
                 time.sleep(5)
                 continue
 
-            # --- "LAZY" PARSING LOOP ---
-            for i, item in enumerate(product_list):
+            for item in product_list:
                 try:
-                    # 1. NAME: Just grab the first link in the row
                     name_element = item.find("a")
-                    
-                    # 2. PRICE: Look for any text in the row that has a '$'
-                    price = None
-                    for text in item.stripped_strings:
-                        if "$" in text and "Price" not in text:
-                            price = text
-                            break
-                    
-                    # --- DEBUGGING IF FAILS ---
-                    # If this is the first row and we missed data, dump the HTML so we can see it!
-                    if i == 0 and (not name_element or not price):
-                        print("\n--- DEBUG: RAW HTML OF ROW 0 ---")
-                        print(item.prettify())
-                        print("--------------------------------\n")
-
-                    if not name_element or not price:
-                        continue
+                    if not name_element: continue
 
                     name = name_element.get_text(strip=True)
-                    # Handle relative links
-                    href = name_element["href"]
-                    if href.startswith("/"):
-                        link = "https://ca.pcpartpicker.com" + href
-                    else:
-                        link = href
-
-                    # Success!
-                    return {"name": name, "price": price, "url": link}
+                    link = "https://ca.pcpartpicker.com" + name_element["href"]
+                    
+                    # --- PRICE FIX: Scan all text in row for the biggest price ---
+                    # The "Price/GB" is usually small ($3-10). The Total Price is big ($100+).
+                    # We grab all price strings, convert to float, and take the biggest one.
+                    prices = []
+                    for text in item.stripped_strings:
+                        if "$" in text and "Price" not in text:
+                            try:
+                                # Clean string: "$145.99" -> 145.99
+                                clean_price = float(text.replace('$', '').replace(',', ''))
+                                prices.append(clean_price)
+                            except ValueError:
+                                continue
+                    
+                    if not prices: continue
+                    
+                    # The total price is usually the maximum value found in the row
+                    total_price = max(prices)
+                    
+                    return {"name": name, "price": total_price, "url": link}
 
                 except Exception:
                     continue
             
-            print("Error: Parsed rows but found no valid products.")
             return None
 
         except Exception as e:
             print(f"Scraping Error: {e}")
             time.sleep(5)
     
-    print("Max retries reached.")
     return None
 
-def post_to_discord(item):
-    if not item:
-        return
+def manage_history(current_price):
+    history = []
+    
+    # 1. Load existing history
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                history = json.load(f)
+        except:
+            history = []
+            
+    # 2. Add today's price
+    today = datetime.now().strftime("%Y-%m-%d")
+    history.append({"date": today, "price": current_price})
+    
+    # Keep only last 30 entries
+    history = history[-30:]
+    
+    # 3. Calculate Stats
+    prices = [entry["price"] for entry in history]
+    avg_price = sum(prices) / len(prices)
+    
+    trend = "➖"
+    if len(prices) > 1:
+        if current_price < prices[-2]: trend = "⬇️ (Dropping)"
+        elif current_price > prices[-2]: trend = "⬆️ (Rising)"
+    
+    # 4. Save back to file
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f)
+        
+    return avg_price, trend, len(history)
 
+def post_to_discord(item, avg_price, trend, days_tracked):
     payload = {
         "username": "RAM Bot",
         "embeds": [
             {
                 "title": "Daily RAM Deal (32GB DDR5 6000+ CL30)",
-                "description": "The current cheapest kit on PCPartPicker (CA).",
+                "description": "Cheapest kit on PCPartPicker (CA).",
                 "color": 5814783,
                 "fields": [
                     {"name": "Product", "value": item["name"], "inline": False},
-                    {"name": "Price", "value": f"**{item['price']}**", "inline": True},
+                    {"name": "Price Today", "value": f"**${item['price']:.2f}**", "inline": True},
+                    {"name": "Trend", "value": f"{trend}", "inline": True},
+                    {"name": "Stats", "value": f"Avg: ${avg_price:.2f} (over {days_tracked} days)", "inline": False}
                 ],
                 "url": item["url"],
             }
@@ -121,7 +146,8 @@ if __name__ == "__main__":
     deal = get_cheapest_ram()
 
     if deal:
-        print(f"Found: {deal['name']} @ {deal['price']}")
-        post_to_discord(deal)
+        print(f"Found: {deal['name']} @ ${deal['price']}")
+        avg, trend, count = manage_history(deal['price'])
+        post_to_discord(deal, avg, trend, count)
     else:
         print("No deal found.")

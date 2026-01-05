@@ -3,9 +3,13 @@ on:
   schedule:
     - cron: '0 14 * * *'
   workflow_dispatch:
+  
 jobs:
   run_script:
     runs-on: ubuntu-latest
+    permissions:        # <--- ADD THIS BLOCK
+      contents: write   # Allows the bot to push changes (save history.json)
+      
     steps:
       - uses: actions/checkout@v2
       
@@ -22,3 +26,12 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python daily_ram_bot.py
+        
+      # --- NEW STEP: COMMIT HISTORY ---
+      - name: Commit and Push History
+        run: |
+          git config --global user.name "RAM Bot"
+          git config --global user.email "rambot@noreply.github.com"
+          git add price_history.json
+          # Only commit if the file actually changed
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update price history" && git push)
