@@ -6,6 +6,7 @@ import time
 import json
 import re
 from datetime import datetime
+from random import randint
 
 PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1"
 HISTORY_FILE = "price_history.json"
@@ -18,19 +19,23 @@ except KeyError as e:
     sys.exit(1)
 
 def get_cheapest_ram(max_retries=3):
+    cache_buster = f"&_={int(time.time())}{randint(1000,9999)}"
+    url_with_cache_buster = PCPP_URL + cache_buster
+    
     payload = {
         "api_key": SCRAPER_API_KEY,
-        "url": PCPP_URL,
+        "url": url_with_cache_buster,
         "render": "true",
         "scroll": "true",
-        "scroll_delay": "2000",
-        "wait_for": "3000",
+        "scroll_delay": "3000",
+        "wait_for": "5000",
         "country_code": "ca",
+        "keep_headers": "true",
     }
 
     for attempt in range(max_retries):
         try:
-            print(f"Contacting ScraperAPI with scroll enabled (attempt {attempt + 1}/{max_retries})...")
+            print(f"Contacting ScraperAPI (attempt {attempt + 1}/{max_retries})...")
             response = requests.get("https://api.scraperapi.com/", params=payload, timeout=120)
             
             if response.status_code == 500:
@@ -43,8 +48,13 @@ def get_cheapest_ram(max_retries=3):
             soup = BeautifulSoup(response.text, "html.parser")
             product_list = soup.select("tr.tr__product")
             
-            print(f"DEBUG: Found {len(product_list)} total products after scrolling\n")
+            print(f"DEBUG: Found {len(product_list)} total products\n")
             
+            if not product_list:
+                print("No products found.")
+                time.sleep(5)
+                continue
+
             candidates = []
             
             for i, item in enumerate(product_list):
@@ -61,8 +71,6 @@ def get_cheapest_ram(max_retries=3):
                     price_cell = item.select_one("td.td__price")
                     if not price_cell:
                         continue
-                    
-                    all_text = price_cell.get_text()
                     
                     prices = []
                     for text in price_cell.stripped_strings:
@@ -82,8 +90,7 @@ def get_cheapest_ram(max_retries=3):
                     candidates.append({
                         "name": name, 
                         "price": total_price, 
-                        "url": link,
-                        "raw_price_text": all_text[:100]
+                        "url": link
                     })
 
                 except Exception as e:
@@ -95,10 +102,9 @@ def get_cheapest_ram(max_retries=3):
             
             candidates.sort(key=lambda x: x['price'])
             
-            print(f"--- Top 15 Cheapest (from {len(candidates)} total) ---")
-            for i, c in enumerate(candidates[:15], 1):
+            print(f"--- Top 10 Cheapest (from {len(candidates)} total) ---")
+            for i, c in enumerate(candidates[:10], 1):
                 print(f"#{i}: ${c['price']:.2f} - {c['name']}")
-                print(f"     Raw price text: {c['raw_price_text']}")
             print("----------------------------\n")
 
             return candidates[0]
