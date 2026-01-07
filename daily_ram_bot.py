@@ -10,6 +10,7 @@ from random import randint
 
 PCPP_URL = "https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1"
 HISTORY_FILE = "price_history.json"
+EXPECTED_MIN_PRODUCTS = 56
 
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
@@ -18,24 +19,27 @@ except KeyError as e:
     print(f"Error: {e} environment variable not set.")
     sys.exit(1)
 
-def get_cheapest_ram(max_retries=3):
-    cache_buster = f"&_={int(time.time())}{randint(1000,9999)}"
-    url_with_cache_buster = PCPP_URL + cache_buster
-    
-    payload = {
-        "api_key": SCRAPER_API_KEY,
-        "url": url_with_cache_buster,
-        "render": "true",
-        "scroll": "true",
-        "scroll_delay": "3000",
-        "wait_for": "5000",
-        "country_code": "ca",
-        "keep_headers": "true",
-    }
-
+def get_cheapest_ram(max_retries=5):
     for attempt in range(max_retries):
+        cache_buster = f"&_={int(time.time())}{randint(1000,9999)}"
+        url_with_cache_buster = PCPP_URL + cache_buster
+        
+        wait_time = 5000 + (attempt * 2000)
+        scroll_delay = 3000 + (attempt * 1000)
+        
+        payload = {
+            "api_key": SCRAPER_API_KEY,
+            "url": url_with_cache_buster,
+            "render": "true",
+            "scroll": "true",
+            "scroll_delay": str(scroll_delay),
+            "wait_for": str(wait_time),
+            "country_code": "ca",
+            "keep_headers": "true",
+        }
+
         try:
-            print(f"Contacting ScraperAPI (attempt {attempt + 1}/{max_retries})...")
+            print(f"Attempt {attempt + 1}/{max_retries} - Wait: {wait_time}ms, Scroll: {scroll_delay}ms")
             response = requests.get("https://api.scraperapi.com/", params=payload, timeout=120)
             
             if response.status_code == 500:
@@ -48,7 +52,12 @@ def get_cheapest_ram(max_retries=3):
             soup = BeautifulSoup(response.text, "html.parser")
             product_list = soup.select("tr.tr__product")
             
-            print(f"DEBUG: Found {len(product_list)} total products\n")
+            print(f"Found {len(product_list)} products (expected {EXPECTED_MIN_PRODUCTS}+)")
+            
+            if len(product_list) < EXPECTED_MIN_PRODUCTS and attempt < max_retries - 1:
+                print(f"⚠️  Incomplete load - only got {len(product_list)}/{EXPECTED_MIN_PRODUCTS}. Retrying with longer waits...")
+                time.sleep(3)
+                continue
             
             if not product_list:
                 print("No products found.")
@@ -102,7 +111,8 @@ def get_cheapest_ram(max_retries=3):
             
             candidates.sort(key=lambda x: x['price'])
             
-            print(f"--- Top 10 Cheapest (from {len(candidates)} total) ---")
+            print(f"\n✓ Successfully scraped {len(candidates)} products")
+            print(f"--- Top 10 Cheapest ---")
             for i, c in enumerate(candidates[:10], 1):
                 print(f"#{i}: ${c['price']:.2f} - {c['name']}")
             print("----------------------------\n")
@@ -115,6 +125,7 @@ def get_cheapest_ram(max_retries=3):
             traceback.print_exc()
             time.sleep(5)
     
+    print("❌ Failed to load all products after all retries")
     return None
 
 def manage_history(current_price):
