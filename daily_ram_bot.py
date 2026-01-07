@@ -43,16 +43,8 @@ def get_cheapest_ram(max_retries=3):
             soup = BeautifulSoup(response.text, "html.parser")
             product_list = soup.select("tr.tr__product")
             
-            print(f"DEBUG: Found {len(product_list)} total products after scrolling")
+            print(f"DEBUG: Found {len(product_list)} total products after scrolling\n")
             
-            if len(product_list) < 30:
-                print(f"WARNING: Only found {len(product_list)} products, expected 50+. Scroll may not have loaded all items.")
-            
-            if not product_list:
-                print("No products found.")
-                time.sleep(5)
-                continue
-
             candidates = []
             
             for i, item in enumerate(product_list):
@@ -66,11 +58,17 @@ def get_cheapest_ram(max_retries=3):
                     
                     link = "https://ca.pcpartpicker.com" + name_element["href"]
                     
+                    price_cell = item.select_one("td.td__price")
+                    if not price_cell:
+                        continue
+                    
+                    all_text = price_cell.get_text()
+                    
                     prices = []
-                    for text in item.stripped_strings:
+                    for text in price_cell.stripped_strings:
                         if "$" in text and "Price" not in text and "/" not in text:
                             try:
-                                clean_price = float(text.replace('$', '').replace(',', ''))
+                                clean_price = float(text.replace('$', '').replace(',', '').replace('+', ''))
                                 if clean_price > 50:
                                     prices.append(clean_price)
                             except ValueError:
@@ -79,9 +77,14 @@ def get_cheapest_ram(max_retries=3):
                     if not prices: 
                         continue
                     
-                    total_price = min(prices) if len(prices) > 1 else prices[0]
+                    total_price = min(prices)
                     
-                    candidates.append({"name": name, "price": total_price, "url": link})
+                    candidates.append({
+                        "name": name, 
+                        "price": total_price, 
+                        "url": link,
+                        "raw_price_text": all_text[:100]
+                    })
 
                 except Exception as e:
                     continue
@@ -92,9 +95,10 @@ def get_cheapest_ram(max_retries=3):
             
             candidates.sort(key=lambda x: x['price'])
             
-            print(f"\n--- Top 10 Cheapest Found (from {len(candidates)} total) ---")
-            for i, c in enumerate(candidates[:10], 1):
+            print(f"--- Top 15 Cheapest (from {len(candidates)} total) ---")
+            for i, c in enumerate(candidates[:15], 1):
                 print(f"#{i}: ${c['price']:.2f} - {c['name']}")
+                print(f"     Raw price text: {c['raw_price_text']}")
             print("----------------------------\n")
 
             return candidates[0]
