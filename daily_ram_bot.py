@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import json
+import re
 from datetime import datetime
 
 # Your Filter URL
@@ -44,17 +45,21 @@ def get_cheapest_ram(max_retries=3):
                 time.sleep(5)
                 continue
 
-            for item in product_list:
+            candidates = []
+            
+            for i, item in enumerate(product_list):
                 try:
                     name_element = item.find("a")
                     if not name_element: continue
 
-                    name = name_element.get_text(strip=True)
+                    # Clean Name: Remove the "(16)" rating counts using Regex
+                    raw_name = name_element.get_text(strip=True)
+                    # Removes anything looking like (123) at the end of the string
+                    name = re.sub(r'\(\d+\)$', '', raw_name).strip()
+                    
                     link = "https://ca.pcpartpicker.com" + name_element["href"]
                     
-                    # --- PRICE FIX: Scan all text in row for the biggest price ---
-                    # The "Price/GB" is usually small ($3-10). The Total Price is big ($100+).
-                    # We grab all price strings, convert to float, and take the biggest one.
+                    # Find Price: Grab all dollar amounts, ignore "Price/GB" (usually small)
                     prices = []
                     for text in item.stripped_strings:
                         if "$" in text and "Price" not in text:
@@ -67,15 +72,30 @@ def get_cheapest_ram(max_retries=3):
                     
                     if not prices: continue
                     
-                    # The total price is usually the maximum value found in the row
+                    # Use max() to get the Total Price (avoids Price/GB), 
+                    # but logic below sorts candidates to find the true cheapest kit.
                     total_price = max(prices)
                     
-                    return {"name": name, "price": total_price, "url": link}
+                    candidates.append({"name": name, "price": total_price, "url": link})
 
                 except Exception:
                     continue
             
-            return None
+            if not candidates:
+                return None
+            
+            # --- THE FIX ---
+            # PCPartPicker sometimes puts expensive "Featured" items at the top.
+            # We explicitly SORT the list by price to find the real cheapest item.
+            candidates.sort(key=lambda x: x['price'])
+            
+            # Debug: Show the top 3 after sorting
+            print("\n--- Top 3 Cheapest Found ---")
+            for c in candidates[:3]:
+                print(f"${c['price']}: {c['name']}")
+            print("----------------------------\n")
+
+            return candidates[0]
 
         except Exception as e:
             print(f"Scraping Error: {e}")
@@ -85,8 +105,6 @@ def get_cheapest_ram(max_retries=3):
 
 def manage_history(current_price):
     history = []
-    
-    # 1. Load existing history
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r") as f:
@@ -94,23 +112,27 @@ def manage_history(current_price):
         except:
             history = []
             
-    # 2. Add today's price
     today = datetime.now().strftime("%Y-%m-%d")
-    history.append({"date": today, "price": current_price})
     
-    # Keep only last 30 entries
+    # Avoid duplicate entries for the same day
+    if not history or history[-1]["date"] != today:
+        history.append({"date": today, "price": current_price})
+    else:
+        # Update today's price if it changed
+        history[-1]["price"] = current_price
+    
     history = history[-30:]
     
-    # 3. Calculate Stats
     prices = [entry["price"] for entry in history]
     avg_price = sum(prices) / len(prices)
     
     trend = "➖"
     if len(prices) > 1:
-        if current_price < prices[-2]: trend = "⬇️ (Dropping)"
-        elif current_price > prices[-2]: trend = "⬆️ (Rising)"
+        # Compare against the PREVIOUS day (index -2)
+        prev_price = prices[-2]
+        if current_price < prev_price: trend = "⬇️"
+        elif current_price > prev_price: trend = "⬆️"
     
-    # 4. Save back to file
     with open(HISTORY_FILE, "w") as f:
         json.dump(history, f)
         
