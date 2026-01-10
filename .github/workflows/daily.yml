@@ -30,21 +30,13 @@ jobs:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python daily_ram_bot.py
 
-      - name: Upload debug HTML
+      - name: Upload residential debug HTML
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pcpp-debug-html
-          path: debug_page.html
+          name: residential-debug-html
+          path: residential_debug.html
           if-no-files-found: warn
-
-      - name: Upload detail pages (if any)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pcpp-detail-html
-          path: detail_*.html
-          if-no-files-found: ignore
 
       - name: Commit and Push History
         run: |
