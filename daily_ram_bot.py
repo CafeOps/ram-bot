@@ -9,6 +9,7 @@ from datetime import datetime
 
 # --- CONFIG ---
 TIMESTAMP = int(time.time())
+# Using your exact URL
 PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
 HISTORY_FILE = "price_history.json"
 DEBUG_HTML_FILE = "residential_debug.html"
@@ -28,28 +29,28 @@ def get_cheapest_ram(max_retries=3):
         "api_key": SCRAPER_API_KEY,
         "url": PCPP_URL,
         "render": "true",
-        "wait_for": "20000",       # 20s Wait for hydration
+        "wait_for": "25000",       # Bumped to 25s to allow full hydration
         "country_code": "ca",
         "device_type": "desktop",
-        "premium": "true"          # <--- THE FIX: FORCE RESIDENTIAL IP (Cost: ~25 credits)
+        "residential": "true"      # <--- CRITICAL FIX: 'residential' is the correct flag, not 'premium'
     }
 
     for attempt in range(max_retries):
         try:
-            print(f"Contacting ScraperAPI (Premium Residential Attempt {attempt + 1}/{max_retries})...")
-            response = requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
+            print(f"Contacting ScraperAPI (Real Residential Attempt {attempt + 1}/{max_retries})...")
+            # Increased timeout to 90s because residential proxies are slower
+            response = requests.get("https://api.scraperapi.com/", params=payload, timeout=90)
             
             if response.status_code != 200:
                 print(f" > HTTP {response.status_code}. Retrying...")
                 time.sleep(5)
                 continue
             
-            # --- CRITICAL: SAVE EVIDENCE ---
-            # If this run fails, this file proves WHY.
+            # --- SAVE EVIDENCE ---
             with open(DEBUG_HTML_FILE, "w", encoding="utf-8") as f:
                 f.write(response.text)
             print(f" > Saved debug HTML to {DEBUG_HTML_FILE} ({len(response.text)} bytes)")
-            # -------------------------------
+            # ---------------------
 
             soup = BeautifulSoup(response.text, "html.parser")
             product_list = soup.select("tr.tr__product")
@@ -57,7 +58,7 @@ def get_cheapest_ram(max_retries=3):
             print(f"DEBUG: Found {len(product_list)} total products (Goal: ~60)")
             
             if not product_list:
-                print("No products found. Retrying...")
+                print("No products found (Possible Cloudflare Block). Retrying...")
                 time.sleep(5)
                 continue
 
@@ -113,10 +114,10 @@ def get_cheapest_ram(max_retries=3):
             
             candidates.sort(key=lambda x: x['price'])
             
-            print(f"--- Top 5 Candidates (Premium Run) ---")
+            print(f"--- Top 5 Candidates (Residential Run) ---")
             for i, c in enumerate(candidates[:5], 1):
                 print(f"#{i}: ${c['price']:.2f} - {c['name']}")
-            print("--------------------------------------\n")
+            print("------------------------------------------\n")
 
             return candidates[0]
 
@@ -199,7 +200,7 @@ def post_to_discord(item, avg_price, trend, days_tracked):
         print(f"Discord Error: {e}")
 
 if __name__ == "__main__":
-    print("Starting Bot (OPTION A: PREMIUM RESIDENTIAL MODE)...")
+    print("Starting Bot (OPTION A: TRUE RESIDENTIAL MODE)...")
     deal = get_cheapest_ram()
 
     if deal:
