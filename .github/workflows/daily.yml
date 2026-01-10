@@ -3,30 +3,44 @@ on:
   schedule:
     - cron: '0 14 * * *'
   workflow_dispatch:
-  
+
 jobs:
   run_script:
     runs-on: ubuntu-latest
-    permissions:        # <--- ADD THIS BLOCK
+    permissions:
       contents: write   # Allows the bot to push changes (save history.json)
-      
+
     steps:
       - uses: actions/checkout@v2
-      
+
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
           python-version: '3.x'
-          
+
       - name: Install dependencies
         run: pip install beautifulsoup4 requests
-        
+
       - name: Run script
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python daily_ram_bot.py
-        
+
+      - name: Upload debug HTML
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: pcpp-debug-html
+          path: debug_page.html
+
+      - name: Upload detail pages (if any)
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: pcpp-detail-html
+          path: detail_*.html
+
       # --- NEW STEP: COMMIT HISTORY ---
       - name: Commit and Push History
         run: |
