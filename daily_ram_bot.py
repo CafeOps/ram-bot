@@ -8,10 +8,15 @@ import re
 from datetime import datetime
 
 # --- CONFIG ---
-# TIMESTAMP ensures we don't get a cached search page
 TIMESTAMP = int(time.time())
-PCPP_SEARCH_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
+# Using the Search Page URL.
+# We append timestamp to force a fresh render (ChatGPT Tip #1)
+PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
 HISTORY_FILE = "price_history.json"
+
+# PRICE FLOOR (ChatGPT Tip #9 Fix)
+# Any number below $120 is treated as "Savings text" or "Rebate text" and ignored.
+MIN_PRICE_CAD = 120.00 
 
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
@@ -20,119 +25,106 @@ except KeyError as e:
     print(f"Error: {e} environment variable not set.")
     sys.exit(1)
 
-def get_scraper_response(url):
-    """
-    Helper to fetch any URL via ScraperAPI with retries.
-    """
+def get_cheapest_ram(max_retries=3):
     payload = {
         "api_key": SCRAPER_API_KEY,
-        "url": url,
-        "render": "true",       # Essential for JS
-        "wait_for": "5000",     # 5s is usually enough for data to hydrate
+        "url": PCPP_URL,
+        "render": "true",
+        "wait_for": "20000",    # INCREASED to 20s (Perplexity Tip #1)
         "country_code": "ca",
         "device_type": "desktop",
     }
-    
-    for attempt in range(3):
+
+    for attempt in range(max_retries):
         try:
-            print(f"Fetching {url[:60]}... (Attempt {attempt+1})")
-            r = requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
-            if r.status_code == 200:
-                return r
-            elif r.status_code == 500:
-                print(" > ScraperAPI 500. Retrying...")
+            print(f"Contacting ScraperAPI (attempt {attempt + 1}/{max_retries})...")
+            response = requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
+            
+            if response.status_code != 200:
+                print(f" > HTTP {response.status_code}. Retrying...")
                 time.sleep(5)
                 continue
-            else:
-                print(f" > HTTP {r.status_code}")
-        except Exception as e:
-            print(f" > Error: {e}")
-            time.sleep(5)
-    return None
+            
+            soup = BeautifulSoup(response.text, "html.parser")
+            product_list = soup.select("tr.tr__product")
+            
+            print(f"DEBUG: Found {len(product_list)} total products")
+            
+            if not product_list:
+                print("No products found. Retrying...")
+                time.sleep(5)
+                continue
 
-def get_top_candidate():
-    """
-    Step 1: Get the #1 result URL from the search page.
-    We TRUST PCPartPicker has sorted by price (ascending).
-    We DO NOT parse the price here to avoid 'Save $100' errors.
-    """
-    response = get_scraper_response(PCPP_SEARCH_URL)
-    if not response: return None
-    
-    soup = BeautifulSoup(response.text, "html.parser")
-    # Select the first product row
-    first_row = soup.select_one("tr.tr__product")
-    if not first_row: 
-        print("Error: No product rows found in search results.")
-        return None
-    
-    name_el = first_row.find("a")
-    if not name_el: return None
-    
-    # Clean name
-    raw_name = name_el.get_text(strip=True)
-    name = re.sub(r'\(\d+\)$', '', raw_name).strip()
-    
-    # Construct absolute URL
-    link = "https://ca.pcpartpicker.com" + name_el["href"]
-    
-    print(f"Search Result #1: {name}")
-    print(f"Link: {link}")
-    
-    return {"name": name, "url": link}
+            candidates = []
+            
+            for item in product_list:
+                try:
+                    # 1. Get Name
+                    name_element = item.find("a")
+                    if not name_element: continue
 
-def get_verified_price(product_url):
-    """
-    Step 2: Visit the product page and read the JSON-LD.
-    This bypasses all visual formatting noise.
-    """
-    response = get_scraper_response(product_url)
-    if not response: return None
-    
-    soup = BeautifulSoup(response.text, "html.parser")
-    
-    # Strategy A: JSON-LD (Standard for Google Shopping)
-    scripts = soup.find_all("script", type="application/ld+json")
-    for s in scripts:
-        try:
-            data = json.loads(s.string)
-            # We look for the "Product" schema
-            if "@type" in data and data["@type"] == "Product":
-                if "offers" in data:
-                    offer = data["offers"]
+                    raw_name = name_element.get_text(strip=True)
+                    name = re.sub(r'\(\d+\)$', '', raw_name).strip()
+                    link = "https://ca.pcpartpicker.com" + name_element["href"]
                     
-                    # 'offers' can be a list or a single object
-                    if isinstance(offer, list):
-                        # Find the lowest price in the list of offers
-                        prices = []
-                        for o in offer:
-                            if "price" in o:
-                                prices.append(float(o["price"]))
-                        if prices: 
-                            found = min(prices)
-                            print(f"JSON-LD Verified Price: ${found}")
-                            return found
-                            
-                    elif isinstance(offer, dict):
-                        if "price" in offer:
-                            found = float(offer["price"])
-                            print(f"JSON-LD Verified Price: ${found}")
-                            return found
-        except:
-            continue
+                    # 2. Get Price (STRICT PARSING)
+                    # We grab the text from the Price Cell.
+                    price_cell = item.select_one("td.td__price")
+                    if not price_cell: continue
+                    
+                    # We prefer the text inside the <a> tag (the actual price link)
+                    # over the general cell text (which contains "Save $XX")
+                    price_link = price_cell.find("a")
+                    if price_link:
+                        raw_text = price_link.get_text(strip=True)
+                    else:
+                        raw_text = price_cell.get_text(strip=True)
+
+                    # Regex to find all price-like numbers
+                    matches = re.findall(r"(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", raw_text)
+                    
+                    valid_prices = []
+                    for m in matches:
+                        try:
+                            val = float(m.replace(',', ''))
+                            # THE FILTER: Ignore "Save $100" or "$10 Rebate"
+                            if val >= MIN_PRICE_CAD:
+                                valid_prices.append(val)
+                        except:
+                            continue
+
+                    if not valid_prices: continue
+                    
+                    # Take the lowest VALID price found in this row
+                    final_price = min(valid_prices)
+                    
+                    candidates.append({
+                        "name": name, 
+                        "price": final_price, 
+                        "url": link
+                    })
+
+                except Exception:
+                    continue
             
-    # Strategy B: OpenGraph/Meta Tags (Backup)
-    # <meta property="product:price:amount" content="479.99" />
-    meta_price = soup.find("meta", property="product:price:amount")
-    if meta_price and meta_price.get("content"):
-        try:
-            found = float(meta_price["content"])
-            print(f"Meta-Tag Verified Price: ${found}")
-            return found
-        except:
-            pass
+            if not candidates:
+                print("No valid candidates after filtering.")
+                return None
             
-    print("Error: Could not extract structured price from product page.")
+            # Sort by price
+            candidates.sort(key=lambda x: x['price'])
+            
+            print(f"--- Top 5 Candidates ---")
+            for i, c in enumerate(candidates[:5], 1):
+                print(f"#{i}: ${c['price']:.2f} - {c['name']}")
+            print("------------------------\n")
+
+            return candidates[0]
+
+        except Exception as e:
+            print(f"Scraping Error: {e}")
+            time.sleep(5)
+    
     return None
 
 def manage_history(current_price):
@@ -152,7 +144,6 @@ def manage_history(current_price):
         history[-1]["price"] = current_price
     
     history = history[-30:]
-    
     prices = [entry["price"] for entry in history]
     avg_price = sum(prices) / len(prices)
     
@@ -167,7 +158,7 @@ def manage_history(current_price):
         
     return avg_price, trend, len(history)
 
-def post_to_discord(item, price, avg_price, trend, days_tracked):
+def post_to_discord(item, avg_price, trend, days_tracked):
     payload = {
         "username": "RAM Bot",
         "embeds": [
@@ -183,7 +174,7 @@ def post_to_discord(item, price, avg_price, trend, days_tracked):
                     },
                     {
                         "name": "Price Today", 
-                        "value": f"**${price:.2f}**", 
+                        "value": f"**${item['price']:.2f}**", 
                         "inline": True
                     },
                     {
@@ -209,20 +200,12 @@ def post_to_discord(item, price, avg_price, trend, days_tracked):
         print(f"Discord Error: {e}")
 
 if __name__ == "__main__":
-    print("Starting Bot (Two-Step Verification Mode)...")
-    
-    # Step 1: Find the winner
-    candidate = get_top_candidate()
-    
-    if candidate:
-        # Step 2: Verify the price
-        real_price = get_verified_price(candidate["url"])
-        
-        if real_price:
-            print(f"Final Result: {candidate['name']} @ ${real_price:.2f}")
-            avg, trend, count = manage_history(real_price)
-            post_to_discord(candidate, real_price, avg, trend, count)
-        else:
-            print("Failed to verify price on product page.")
+    print("Starting Bot (Creative Fix Mode)...")
+    deal = get_cheapest_ram()
+
+    if deal:
+        print(f"Found: {deal['name']} @ ${deal['price']:.2f}")
+        avg, trend, count = manage_history(deal['price'])
+        post_to_discord(deal, avg, trend, count)
     else:
-        print("No candidates found in search.")
+        print("No deal found.")
