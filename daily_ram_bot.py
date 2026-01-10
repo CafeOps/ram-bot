@@ -10,17 +10,17 @@ from datetime import datetime
 # --- CONFIG ---
 TIMESTAMP = int(time.time())
 
-# 1. PCPartPicker URL 
+# 1. PCPartPicker URL (Your original filters)
 PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
 
-# 2. Newegg URL 
+# 2. Newegg URL (Your specific filters + Order=1 for lowest price)
 NEWEGG_URL = "https://www.newegg.ca/p/pl?N=100007610%20601459359%20601424507%20601410928%20601410054%20601409314%20601409984%20601334734%20601407112%20601397651%20601397653%20601397951%20601275378%20500002048%20601413261&Order=1"
 
 HISTORY_FILE = "price_history.json"
 DEBUG_PCPP_FILE = "debug_pcpp.html"
 DEBUG_NEWEGG_FILE = "debug_newegg.html"
 
-# PRICE FLOOR: Safety net 
+# PRICE FLOOR: Safety net to ignore cables/accessories
 MIN_PRICE_CAD = 120.00 
 
 try:
@@ -208,7 +208,7 @@ def post_to_discord(item, avg_price, trend, days_tracked):
         "embeds": [
             {
                 "title": f"Daily RAM Deal ({item['source']})",
-                "description": "Lowest price found across PCPartPicker & Newegg.",
+                "description": "Good morning. This is currently the cheapest 2x16GB 6000+ MHz CL30 or faster kit I could find.",
                 "color": color,
                 "fields": [
                     {
