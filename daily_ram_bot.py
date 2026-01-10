@@ -8,9 +8,7 @@ import re
 from datetime import datetime
 
 # --- CONFIG ---
-# We append a timestamp to the URL to force ScraperAPI to fetch a fresh copy every time.
 TIMESTAMP = int(time.time())
-# Added '&merchants=' to URL to ensure we aren't filtering, though mostly relies on robust parsing now.
 PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
 HISTORY_FILE = "price_history.json"
 
@@ -25,9 +23,9 @@ def get_cheapest_ram(max_retries=3):
     payload = {
         "api_key": SCRAPER_API_KEY,
         "url": PCPP_URL,
-        "render": "true",       # Essential for JS
-        "wait_for": "10000",    # 10s wait to ensure full table load
-        "scroll": "true",       # Trigger lazy loading
+        "render": "true",
+        "wait_for": "10000",
+        "scroll": "true",
         "scroll_delay": "2000",
         "country_code": "ca",
         "device_type": "desktop",
@@ -67,41 +65,35 @@ def get_cheapest_ram(max_retries=3):
                     name = re.sub(r'\(\d+\)$', '', raw_name).strip()
                     link = "https://ca.pcpartpicker.com" + name_element["href"]
                     
-                    # 2. Get Price (REGEX FIX)
-                    price_cell = item.select_one("td.td__price")
-                    if not price_cell: continue
+                    # 2. Get Price (TARGETED FIX)
+                    # We only look for the <a> tag inside the price cell.
+                    # This avoids grabbing "Save $100" text or "Shipping" text.
+                    price_link = item.select_one("td.td__price a")
                     
-                    prices = []
+                    # If no link, checking if there is plain text (rare, but possible for some vendors)
+                    if price_link:
+                        raw_price_text = price_link.get_text(strip=True)
+                    else:
+                        # Fallback: strict grab of just the price cell text, but risky
+                        price_cell = item.select_one("td.td__price")
+                        if not price_cell: continue
+                        raw_price_text = price_cell.get_text(strip=True)
+
+                    # Regex to extract the number from strings like "$479.99*" or "$519.50"
+                    # This handles the Newegg asterisk and currency symbols.
+                    match = re.search(r"\$?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", raw_price_text)
                     
-                    # Grab all text from the cell, including children
-                    cell_text = price_cell.get_text(" ", strip=True)
-                    
-                    # Regex to find standard prices: $123.45 or 1,234.56
-                    # Ignores '*', '+', 'Promo', etc.
-                    matches = re.findall(r"\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", cell_text)
-                    
-                    for m in matches:
-                        try:
-                            # Clean string to float
-                            clean_val = float(m.replace(',', '').replace('$', ''))
-                            
-                            # Filter out "Price per GB" (usually < $50) 
-                            # and obviously broken parses
-                            if clean_val > 50: 
-                                prices.append(clean_val)
-                        except ValueError:
-                            continue
-                    
-                    if not prices: continue
-                    
-                    # Store the lowest valid price found for this row
-                    total_price = min(prices)
-                    
-                    candidates.append({
-                        "name": name, 
-                        "price": total_price, 
-                        "url": link
-                    })
+                    if match:
+                        clean_price = float(match.group(1).replace(',', ''))
+                        
+                        # Sanity check: 32GB DDR5 should not be $10 or $100 (unlikely in 2026 for this spec)
+                        # We set a floor to avoid misparsed "Price/GB" or weird rebates.
+                        if clean_price > 50:
+                            candidates.append({
+                                "name": name, 
+                                "price": clean_price, 
+                                "url": link
+                            })
 
                 except Exception:
                     continue
@@ -110,7 +102,7 @@ def get_cheapest_ram(max_retries=3):
                 print("No valid candidates parsed.")
                 return None
             
-            # Sort by price to find the absolute winner
+            # Sort by price
             candidates.sort(key=lambda x: x['price'])
             
             print(f"--- Top 5 Cheapest ---")
@@ -137,11 +129,13 @@ def manage_history(current_price):
             
     today = datetime.now().strftime("%Y-%m-%d")
     
+    # Simple logic to add/update today's price
     if not history or history[-1]["date"] != today:
         history.append({"date": today, "price": current_price})
     else:
         history[-1]["price"] = current_price
     
+    # Keep last 30 entries
     history = history[-30:]
     
     prices = [entry["price"] for entry in history]
