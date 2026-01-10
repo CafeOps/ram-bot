@@ -30,7 +30,6 @@ jobs:
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python daily_ram_bot.py
 
-      # ---- DEBUG ARTIFACTS ----
       - name: Upload debug HTML
         if: always()
         uses: actions/upload-artifact@v4
@@ -47,7 +46,6 @@ jobs:
           path: detail_*.html
           if-no-files-found: ignore
 
-      # ---- COMMIT PRICE HISTORY ----
       - name: Commit and Push History
         run: |
           git config --global user.name "RAM Bot"
