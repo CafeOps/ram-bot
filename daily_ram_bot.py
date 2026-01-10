@@ -7,25 +7,30 @@ import json
 import re
 from datetime import datetime
 
-# Config
-BASE_URL = "https://ca.pcpartpicker.com/products/memory/"
-# keep the same PCPartPicker filters as you had in the fragment
-FRAGMENT = "L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price"
+# ---- IMPORTANT: use the exact fragment URL you provided (keeps all client-side filters) ----
+PCPP_URL_TEMPLATE = "https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page={page}"
 HISTORY_FILE = "price_history.json"
-SEARCH_STRING = "Patriot Viper Elite"  # the product string we want to detect
+DEBUG_HTML_FILE = "debug_page.html"
+SEARCH_STRING = "Patriot Viper Elite"
 
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
     SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
 except KeyError as e:
-    print(f"Error: {e} environment variable not set.")
+    print(f"Missing environment variable: {e}")
     sys.exit(1)
 
+# client-side safety filter: only accept kits that are 32 GB and DDR5
+def is_target_kit(name: str) -> bool:
+    if not name:
+        return False
+    n = name.upper()
+    # require 32GB and DDR5
+    has_32 = bool(re.search(r'\b32\s*GB\b', n)) or '32GB' in n
+    has_ddr5 = 'DDR5' in n
+    return has_32 and has_ddr5
 
 def fetch_product_detail_page(relative_href):
-    """
-    Fetch a PCPP product detail page and save it to disk for inspection.
-    """
     target = "https://ca.pcpartpicker.com" + relative_href + "?_=" + str(int(time.time()))
     payload = {
         "api_key": SCRAPER_API_KEY,
@@ -47,37 +52,27 @@ def fetch_product_detail_page(relative_href):
         print(f"DIAG: error fetching detail page {relative_href}: {e}")
         return None
 
-
 def get_cheapest_ram(max_retries=3, max_pages=3):
-    """
-    Robust scraping:
-    - pages through up to max_pages
-    - cache-busts the target URL
-    - extracts all $ amounts by regex and chooses the min
-    - dumps combined HTML to debug_page.html for offline inspection
-    - if SEARCH_STRING not found, fetches per-product detail pages and writes them to disk
-    """
     candidates = []
     seen_hrefs = set()
     combined_html = ""
-    found_search = False
 
     for page in range(1, max_pages + 1):
-        full_target = f"{BASE_URL}?page={page}&{FRAGMENT}&_={int(time.time())}"
+        # Use the exact fragment URL (PCPP_URL_TEMPLATE), filling page into fragment.
+        page_url = PCPP_URL_TEMPLATE.format(page=page)
         payload = {
             "api_key": SCRAPER_API_KEY,
-            "url": full_target,
+            "url": page_url,
             "render": "true",
             "scroll": "true",
             "scroll_delay": "3000",
-            "wait_for": "5000",
+            "wait_for": "6000",
             "country_code": "ca",
-            # "device_type": "desktop"  # can add if needed
         }
 
         for attempt in range(max_retries):
             try:
-                print(f"Contacting ScraperAPI page {page} (attempt {attempt + 1}/{max_retries})...")
+                print(f"Contacting ScraperAPI page {page} (attempt {attempt+1}/{max_retries})...")
                 response = requests.get("https://api.scraperapi.com/", params=payload, timeout=120)
 
                 if response.status_code == 500:
@@ -89,23 +84,20 @@ def get_cheapest_ram(max_retries=3, max_pages=3):
                 response_text = response.text
                 combined_html += response_text
 
-                # Quick presence test for the missing product on this page
+                # Quick presence test for debugging
                 if SEARCH_STRING in response_text:
                     print(f"DIAG: FOUND product string '{SEARCH_STRING}' on page {page}")
-                    found_search = True
                 else:
-                    print(f"DIAG: product string '{SEARCH_STRING}' not on page {page}")
+                    print(f"DIAG: product string '{SEARCH_STRING}' not found on page {page}")
 
                 soup = BeautifulSoup(response_text, "html.parser")
                 product_list = soup.select("tr.tr__product")
-
                 print(f"DEBUG: page {page} - Found {len(product_list)} products")
 
                 if not product_list:
-                    # No products on this page; break out of page loop
                     break
 
-                for i, item in enumerate(product_list):
+                for item in product_list:
                     try:
                         name_element = item.find("a")
                         if not name_element:
@@ -116,16 +108,22 @@ def get_cheapest_ram(max_retries=3, max_pages=3):
                         href = name_element.get("href", "")
                         if href:
                             seen_hrefs.add(href)
-
                         link = "https://ca.pcpartpicker.com" + href
+
+                        # Enforce client-side filter — skip items not matching 32GB + DDR5
+                        if not is_target_kit(name):
+                            # debug log to make it obvious why we skip
+                            # (comment this out if logs are too noisy)
+                            # print(f"SKIP (not target kit): {name}")
+                            continue
 
                         price_cell = item.select_one("td.td__price")
                         if not price_cell:
-                            # Log for diagnostics
                             print(f"DEBUG SKIP: no price cell for '{name}'")
                             continue
 
                         raw_text = price_cell.get_text(" ", strip=True)
+
                         # Extract all dollar amounts via regex
                         matches = re.findall(r'\$\s*[0-9,]+(?:\.\d{1,2})?', raw_text)
                         prices = []
@@ -165,34 +163,29 @@ def get_cheapest_ram(max_retries=3, max_pages=3):
                         print(f"Item parse error (ignored): {e}")
                         continue
 
-                # success for this page -> break retry loop
+                # successful parse for this page
                 break
 
             except Exception as e:
                 print(f"Scraping Error page {page}: {e}")
-                import traceback
-                traceback.print_exc()
                 time.sleep(5)
                 continue
 
-        # continue to next page
-
-    # Save combined HTML for offline inspection
+    # save combined HTML for offline inspection
     try:
-        with open("debug_page.html", "w", encoding="utf-8") as f:
+        with open(DEBUG_HTML_FILE, "w", encoding="utf-8") as f:
             f.write(combined_html)
         print("DIAG: Combined raw HTML saved to debug_page.html")
     except Exception as e:
         print(f"DIAG: error saving debug HTML: {e}")
 
-    # Final presence check across combined HTML
-    if SEARCH_STRING in combined_html:
-        print(f"DIAG: FOUND product string '{SEARCH_STRING}' in combined HTML")
-    else:
-        print(f"DIAG: MISSING product string '{SEARCH_STRING}' in combined HTML - proceeding to fetch detail pages for inspection")
-        # fetch detail pages for all seen product hrefs (this can produce multiple files)
-        for href in list(seen_hrefs)[:50]:  # limit to first 50 to avoid too many calls
+    # if Patriot Viper not found at all, fetch detail pages for inspection
+    if SEARCH_STRING not in combined_html:
+        print(f"DIAG: MISSING product string '{SEARCH_STRING}' in combined HTML - fetching detail pages")
+        for href in list(seen_hrefs)[:50]:
             fetch_product_detail_page(href)
+    else:
+        print(f"DIAG: FOUND product string '{SEARCH_STRING}' in combined HTML")
 
     if not candidates:
         print("No valid candidates found.")
