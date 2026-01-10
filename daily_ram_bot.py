@@ -3,12 +3,15 @@ from bs4 import BeautifulSoup
 import os
 import sys
 import time
+import json
 import re
+from datetime import datetime
 
-# CONFIG
-# We append a random timestamp to FORCE ScraperAPI to fetch a fresh copy
+# --- CONFIG ---
+# We append a timestamp to the URL to force ScraperAPI to fetch a fresh copy every time.
 TIMESTAMP = int(time.time())
 PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
+HISTORY_FILE = "price_history.json"
 
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
@@ -17,65 +20,166 @@ except KeyError as e:
     print(f"Error: {e} environment variable not set.")
     sys.exit(1)
 
-def run_fast_diagnostic():
-    print(f"[START] Fast Diagnostic Run")
-    print(f"[INFO] URL (Cache Busted): {PCPP_URL}")
-
+def get_cheapest_ram(max_retries=3):
     payload = {
         "api_key": SCRAPER_API_KEY,
         "url": PCPP_URL,
         "render": "true",       # Essential for JS
-        "wait_for": "10000",    # 10s is safer than 5s for full hydration
-        "scroll": "true",       # Trigger lazy load
+        "wait_for": "10000",    # 10s wait to ensure full table load
+        "scroll": "true",       # Trigger lazy loading
         "scroll_delay": "2000",
         "country_code": "ca",
         "device_type": "desktop",
     }
 
-    try:
-        t0 = time.time()
-        r = requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
-        duration = time.time() - t0
-        print(f"[INFO] Request finished in {duration:.2f}s (Status: {r.status_code})")
-        
-        if r.status_code != 200:
-            print(f"[ERROR] ScraperAPI failed: {r.text}")
-            return
-
-        html = r.text
-        
-        # 1. The "Ghost" Check
-        target = "Patriot Viper Elite"
-        if target in html:
-            print(f"\n✅ SUCCESS: Found '{target}' in HTML!")
+    for attempt in range(max_retries):
+        try:
+            print(f"Contacting ScraperAPI (attempt {attempt + 1}/{max_retries})...")
+            response = requests.get("https://api.scraperapi.com/", params=payload, timeout=120)
             
-            # 2. Extract price to verify it's readable
-            # Simple regex search around the name
-            # Look for the name, then grab the next price pattern
-            snippet_match = re.search(r'Patriot Viper Elite.*?\$(\d+\.\d{2})', html, re.DOTALL)
-            if snippet_match:
-                print(f"   Detected Price: ${snippet_match.group(1)}")
-            else:
-                print(f"   (Name found, but strict regex missed price. Check manually.)")
-                
-        else:
-            print(f"\n❌ FAILURE: '{target}' NOT found in HTML.")
-            print("   Possible causes: Merchant Block, Region Mismatch, or Page Load Timeout.")
+            if response.status_code == 500:
+                print("ScraperAPI 500 error, retrying...")
+                time.sleep(10)
+                continue
+            
+            response.raise_for_status()
 
-        # 3. Standard parsing for the log (just to see what we DID get)
-        soup = BeautifulSoup(html, "html.parser")
-        products = soup.select("tr.tr__product")
-        print(f"\n[INFO] Total Rows Parsed: {len(products)}")
+            soup = BeautifulSoup(response.text, "html.parser")
+            product_list = soup.select("tr.tr__product")
+            
+            print(f"DEBUG: Found {len(product_list)} total products")
+            
+            if not product_list:
+                print("No products found (possible load error). Retrying...")
+                time.sleep(5)
+                continue
+
+            candidates = []
+            
+            for item in product_list:
+                try:
+                    # 1. Get Name
+                    name_element = item.find("a")
+                    if not name_element: continue
+
+                    raw_name = name_element.get_text(strip=True)
+                    name = re.sub(r'\(\d+\)$', '', raw_name).strip()
+                    link = "https://ca.pcpartpicker.com" + name_element["href"]
+                    
+                    # 2. Get Price (Robust)
+                    price_cell = item.select_one("td.td__price")
+                    if not price_cell: continue
+                    
+                    prices = []
+                    # We loop through stripped_strings to avoid grabbing "Add" button text
+                    for text in price_cell.stripped_strings:
+                        if "$" in text and "Price" not in text and "/" not in text:
+                            try:
+                                clean_price = float(text.replace('$', '').replace(',', '').replace('+', ''))
+                                # Filter out "Price per GB" (usually < $50)
+                                if clean_price > 50:
+                                    prices.append(clean_price)
+                            except ValueError:
+                                continue
+                    
+                    if not prices: continue
+                    
+                    # Store the lowest valid price found for this row
+                    total_price = min(prices)
+                    
+                    candidates.append({
+                        "name": name, 
+                        "price": total_price, 
+                        "url": link
+                    })
+
+                except Exception:
+                    continue
+            
+            if not candidates:
+                print("No valid candidates parsed.")
+                return None
+            
+            # Sort by price to find the absolute winner
+            candidates.sort(key=lambda x: x['price'])
+            
+            print(f"--- Top 5 Cheapest ---")
+            for i, c in enumerate(candidates[:5], 1):
+                print(f"#{i}: ${c['price']:.2f} - {c['name']}")
+            print("--------------------\n")
+
+            return candidates[0]
+
+        except Exception as e:
+            print(f"Scraping Error: {e}")
+            time.sleep(10)
+    
+    return None
+
+def manage_history(current_price):
+    history = []
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                history = json.load(f)
+        except:
+            history = []
+            
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    if not history or history[-1]["date"] != today:
+        history.append({"date": today, "price": current_price})
+    else:
+        history[-1]["price"] = current_price
+    
+    history = history[-30:]
+    
+    prices = [entry["price"] for entry in history]
+    avg_price = sum(prices) / len(prices)
+    
+    trend = "➖"
+    if len(prices) > 1:
+        prev_price = prices[-2]
+        if current_price < prev_price: trend = "⬇️"
+        elif current_price > prev_price: trend = "⬆️"
+    
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f)
         
-        if len(products) > 0:
-            print("--- First 5 Items Seen ---")
-            for item in products[:5]:
-                name = item.find("a").get_text(strip=True)
-                price = item.select_one("td.td__price").get_text(strip=True)
-                print(f"- {name} [{price}]")
-                
+    return avg_price, trend, len(history)
+
+def post_to_discord(item, avg_price, trend, days_tracked):
+    payload = {
+        "username": "RAM Bot",
+        "embeds": [
+            {
+                "title": "Daily RAM Deal (32GB DDR5 6000+ CL30)",
+                "description": "Cheapest kit on PCPartPicker (CA).",
+                "color": 5814783,
+                "fields": [
+                    {"name": "Product", "value": item["name"], "inline": False},
+                    {"name": "Price Today", "value": f"**${item['price']:.2f}**", "inline": True},
+                    {"name": "Trend", "value": f"{trend}", "inline": True},
+                    {"name": "Stats", "value": f"Avg: ${avg_price:.2f} (over {days_tracked} days)", "inline": False}
+                ],
+                "url": item["url"],
+            }
+        ],
+    }
+
+    try:
+        requests.post(WEBHOOK_URL.strip(), json=payload, timeout=15)
+        print("Success: Posted to Discord.")
     except Exception as e:
-        print(f"[CRITICAL] Script Error: {e}")
+        print(f"Discord Error: {e}")
 
 if __name__ == "__main__":
-    run_fast_diagnostic()
+    print("Starting Bot...")
+    deal = get_cheapest_ram()
+
+    if deal:
+        print(f"Found: {deal['name']} @ ${deal['price']:.2f}")
+        avg, trend, count = manage_history(deal['price'])
+        post_to_discord(deal, avg, trend, count)
+    else:
+        print("No deal found.")
