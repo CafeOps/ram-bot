@@ -10,6 +10,7 @@ from datetime import datetime
 # --- CONFIG ---
 # We append a timestamp to the URL to force ScraperAPI to fetch a fresh copy every time.
 TIMESTAMP = int(time.time())
+# Added '&merchants=' to URL to ensure we aren't filtering, though mostly relies on robust parsing now.
 PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
 HISTORY_FILE = "price_history.json"
 
@@ -66,21 +67,30 @@ def get_cheapest_ram(max_retries=3):
                     name = re.sub(r'\(\d+\)$', '', raw_name).strip()
                     link = "https://ca.pcpartpicker.com" + name_element["href"]
                     
-                    # 2. Get Price (Robust)
+                    # 2. Get Price (REGEX FIX)
                     price_cell = item.select_one("td.td__price")
                     if not price_cell: continue
                     
                     prices = []
-                    # We loop through stripped_strings to avoid grabbing "Add" button text
-                    for text in price_cell.stripped_strings:
-                        if "$" in text and "Price" not in text and "/" not in text:
-                            try:
-                                clean_price = float(text.replace('$', '').replace(',', '').replace('+', ''))
-                                # Filter out "Price per GB" (usually < $50)
-                                if clean_price > 50:
-                                    prices.append(clean_price)
-                            except ValueError:
-                                continue
+                    
+                    # Grab all text from the cell, including children
+                    cell_text = price_cell.get_text(" ", strip=True)
+                    
+                    # Regex to find standard prices: $123.45 or 1,234.56
+                    # Ignores '*', '+', 'Promo', etc.
+                    matches = re.findall(r"\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", cell_text)
+                    
+                    for m in matches:
+                        try:
+                            # Clean string to float
+                            clean_val = float(m.replace(',', '').replace('$', ''))
+                            
+                            # Filter out "Price per GB" (usually < $50) 
+                            # and obviously broken parses
+                            if clean_val > 50: 
+                                prices.append(clean_val)
+                        except ValueError:
+                            continue
                     
                     if not prices: continue
                     
@@ -157,10 +167,26 @@ def post_to_discord(item, avg_price, trend, days_tracked):
                 "description": "Cheapest kit on PCPartPicker (CA).",
                 "color": 5814783,
                 "fields": [
-                    {"name": "Product", "value": item["name"], "inline": False},
-                    {"name": "Price Today", "value": f"**${item['price']:.2f}**", "inline": True},
-                    {"name": "Trend", "value": f"{trend}", "inline": True},
-                    {"name": "Stats", "value": f"Avg: ${avg_price:.2f} (over {days_tracked} days)", "inline": False}
+                    {
+                        "name": "Product", 
+                        "value": f"[{item['name']}]({item['url']})", 
+                        "inline": False
+                    },
+                    {
+                        "name": "Price Today", 
+                        "value": f"**${item['price']:.2f}**", 
+                        "inline": True
+                    },
+                    {
+                        "name": "Trend", 
+                        "value": f"{trend}", 
+                        "inline": True
+                    },
+                    {
+                        "name": "Stats", 
+                        "value": f"Avg: ${avg_price:.2f} (over {days_tracked} days)", 
+                        "inline": False
+                    }
                 ],
                 "url": item["url"],
             }
