@@ -9,13 +9,11 @@ from datetime import datetime
 
 # --- CONFIG ---
 TIMESTAMP = int(time.time())
-# Using the Search Page URL.
-# We append timestamp to force a fresh render (ChatGPT Tip #1)
 PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
 HISTORY_FILE = "price_history.json"
+DEBUG_HTML_FILE = "residential_debug.html"
 
-# PRICE FLOOR (ChatGPT Tip #9 Fix)
-# Any number below $120 is treated as "Savings text" or "Rebate text" and ignored.
+# PRICE FLOOR: Filters out "Save $100" or "$10 Rebate" text.
 MIN_PRICE_CAD = 120.00 
 
 try:
@@ -30,14 +28,15 @@ def get_cheapest_ram(max_retries=3):
         "api_key": SCRAPER_API_KEY,
         "url": PCPP_URL,
         "render": "true",
-        "wait_for": "20000",    # INCREASED to 20s (Perplexity Tip #1)
+        "wait_for": "20000",       # 20s Wait for hydration
         "country_code": "ca",
         "device_type": "desktop",
+        "premium": "true"          # <--- THE FIX: FORCE RESIDENTIAL IP (Cost: ~25 credits)
     }
 
     for attempt in range(max_retries):
         try:
-            print(f"Contacting ScraperAPI (attempt {attempt + 1}/{max_retries})...")
+            print(f"Contacting ScraperAPI (Premium Residential Attempt {attempt + 1}/{max_retries})...")
             response = requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
             
             if response.status_code != 200:
@@ -45,10 +44,17 @@ def get_cheapest_ram(max_retries=3):
                 time.sleep(5)
                 continue
             
+            # --- CRITICAL: SAVE EVIDENCE ---
+            # If this run fails, this file proves WHY.
+            with open(DEBUG_HTML_FILE, "w", encoding="utf-8") as f:
+                f.write(response.text)
+            print(f" > Saved debug HTML to {DEBUG_HTML_FILE} ({len(response.text)} bytes)")
+            # -------------------------------
+
             soup = BeautifulSoup(response.text, "html.parser")
             product_list = soup.select("tr.tr__product")
             
-            print(f"DEBUG: Found {len(product_list)} total products")
+            print(f"DEBUG: Found {len(product_list)} total products (Goal: ~60)")
             
             if not product_list:
                 print("No products found. Retrying...")
@@ -68,26 +74,21 @@ def get_cheapest_ram(max_retries=3):
                     link = "https://ca.pcpartpicker.com" + name_element["href"]
                     
                     # 2. Get Price (STRICT PARSING)
-                    # We grab the text from the Price Cell.
                     price_cell = item.select_one("td.td__price")
                     if not price_cell: continue
                     
-                    # We prefer the text inside the <a> tag (the actual price link)
-                    # over the general cell text (which contains "Save $XX")
                     price_link = price_cell.find("a")
                     if price_link:
                         raw_text = price_link.get_text(strip=True)
                     else:
                         raw_text = price_cell.get_text(strip=True)
 
-                    # Regex to find all price-like numbers
                     matches = re.findall(r"(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", raw_text)
                     
                     valid_prices = []
                     for m in matches:
                         try:
                             val = float(m.replace(',', ''))
-                            # THE FILTER: Ignore "Save $100" or "$10 Rebate"
                             if val >= MIN_PRICE_CAD:
                                 valid_prices.append(val)
                         except:
@@ -95,7 +96,6 @@ def get_cheapest_ram(max_retries=3):
 
                     if not valid_prices: continue
                     
-                    # Take the lowest VALID price found in this row
                     final_price = min(valid_prices)
                     
                     candidates.append({
@@ -111,13 +111,12 @@ def get_cheapest_ram(max_retries=3):
                 print("No valid candidates after filtering.")
                 return None
             
-            # Sort by price
             candidates.sort(key=lambda x: x['price'])
             
-            print(f"--- Top 5 Candidates ---")
+            print(f"--- Top 5 Candidates (Premium Run) ---")
             for i, c in enumerate(candidates[:5], 1):
                 print(f"#{i}: ${c['price']:.2f} - {c['name']}")
-            print("------------------------\n")
+            print("--------------------------------------\n")
 
             return candidates[0]
 
@@ -200,7 +199,7 @@ def post_to_discord(item, avg_price, trend, days_tracked):
         print(f"Discord Error: {e}")
 
 if __name__ == "__main__":
-    print("Starting Bot (Creative Fix Mode)...")
+    print("Starting Bot (OPTION A: PREMIUM RESIDENTIAL MODE)...")
     deal = get_cheapest_ram()
 
     if deal:
