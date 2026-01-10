@@ -8,14 +8,13 @@ import re
 from datetime import datetime
 
 # --- CONFIG ---
-TIMESTAMP = int(time.time())
-# Using your exact URL
-PCPP_URL = f"https://ca.pcpartpicker.com/products/memory/#L=30,300&S=6000,9600&X=0,100522&Z=32768002&sort=price&page=1&_t={TIMESTAMP}"
+# URL: Provided by user (Newegg CA, Specific Filters, Sorted by Lowest Price)
+NEWEGG_URL = "https://www.newegg.ca/p/pl?N=100007610%20601459359%20601424507%20601410928%20601410054%20601409314%20601409984%20601334734%20601407112%20601397651%20601397653%20601397951%20601275378%20500002048%20601413261&Order=1"
 HISTORY_FILE = "price_history.json"
-DEBUG_HTML_FILE = "residential_debug.html"
+DEBUG_HTML_FILE = "newegg_debug.html"
 
-# PRICE FLOOR: Filters out "Save $100" or "$10 Rebate" text.
-MIN_PRICE_CAD = 120.00 
+# PRICE FLOOR: Avoids cables, fans, or "open box" junk if scraper gets confused
+MIN_PRICE_CAD = 130.00 
 
 try:
     WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
@@ -25,83 +24,80 @@ except KeyError as e:
     sys.exit(1)
 
 def get_cheapest_ram(max_retries=3):
+    # Newegg is generally easier than PCPP, but we keep 'residential' for safety.
     payload = {
         "api_key": SCRAPER_API_KEY,
-        "url": PCPP_URL,
-        "render": "true",
-        "wait_for": "25000",       # Bumped to 25s to allow full hydration
+        "url": NEWEGG_URL,
         "country_code": "ca",
         "device_type": "desktop",
-        "residential": "true"      # <--- CRITICAL FIX: 'residential' is the correct flag, not 'premium'
+        "residential": "true" 
     }
 
     for attempt in range(max_retries):
         try:
-            print(f"Contacting ScraperAPI (Real Residential Attempt {attempt + 1}/{max_retries})...")
-            # Increased timeout to 90s because residential proxies are slower
-            response = requests.get("https://api.scraperapi.com/", params=payload, timeout=90)
+            print(f"Contacting ScraperAPI (Newegg Target - Attempt {attempt + 1}/{max_retries})...")
+            response = requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
             
             if response.status_code != 200:
                 print(f" > HTTP {response.status_code}. Retrying...")
                 time.sleep(5)
                 continue
             
-            # --- SAVE EVIDENCE ---
+            # Save debug HTML just in case
             with open(DEBUG_HTML_FILE, "w", encoding="utf-8") as f:
                 f.write(response.text)
-            print(f" > Saved debug HTML to {DEBUG_HTML_FILE} ({len(response.text)} bytes)")
-            # ---------------------
+            print(f" > Saved debug HTML to {DEBUG_HTML_FILE}")
 
             soup = BeautifulSoup(response.text, "html.parser")
-            product_list = soup.select("tr.tr__product")
             
-            print(f"DEBUG: Found {len(product_list)} total products (Goal: ~60)")
+            # Newegg stores products in "div.item-cell"
+            items = soup.select("div.item-cell")
+            print(f"DEBUG: Found {len(items)} items on page.")
             
-            if not product_list:
-                print("No products found (Possible Cloudflare Block). Retrying...")
-                time.sleep(5)
+            if not items:
+                print("No items found. Retrying...")
                 continue
 
             candidates = []
             
-            for item in product_list:
+            for item in items:
                 try:
                     # 1. Get Name
-                    name_element = item.find("a")
-                    if not name_element: continue
+                    title_tag = item.select_one("a.item-title")
+                    if not title_tag: continue
+                    
+                    name = title_tag.get_text(strip=True)
+                    link = title_tag['href']
+                    
+                    # 2. Get Price
+                    # Newegg structure: <li class="price-current"> <strong>479</strong> <sup>.99</sup> </li>
+                    price_wrap = item.select_one(".price-current")
+                    if not price_wrap: continue
 
-                    raw_name = name_element.get_text(strip=True)
-                    name = re.sub(r'\(\d+\)$', '', raw_name).strip()
-                    link = "https://ca.pcpartpicker.com" + name_element["href"]
+                    # Remove "Save: 10%" text or other hidden junk
+                    for junk in price_wrap.select(".price-note, .price-was"):
+                        junk.decompose()
+
+                    # Extract the raw numbers from strong/sup tags
+                    strong = price_wrap.find("strong")
+                    sup = price_wrap.find("sup")
                     
-                    # 2. Get Price (STRICT PARSING)
-                    price_cell = item.select_one("td.td__price")
-                    if not price_cell: continue
-                    
-                    price_link = price_cell.find("a")
-                    if price_link:
-                        raw_text = price_link.get_text(strip=True)
+                    if strong and sup:
+                        price_str = f"{strong.get_text(strip=True)}{sup.get_text(strip=True)}"
                     else:
-                        raw_text = price_cell.get_text(strip=True)
+                        # Fallback regex if structure changes
+                        price_str = price_wrap.get_text(strip=True)
+                    
+                    # Clean string "$ 479 .99" -> "479.99"
+                    price_val = float(re.sub(r"[^\d.]", "", price_str))
+                    
+                    # Filter out junk/shipping costs
+                    if price_val < MIN_PRICE_CAD: 
+                        continue
 
-                    matches = re.findall(r"(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)", raw_text)
-                    
-                    valid_prices = []
-                    for m in matches:
-                        try:
-                            val = float(m.replace(',', ''))
-                            if val >= MIN_PRICE_CAD:
-                                valid_prices.append(val)
-                        except:
-                            continue
-
-                    if not valid_prices: continue
-                    
-                    final_price = min(valid_prices)
-                    
                     candidates.append({
-                        "name": name, 
-                        "price": final_price, 
+                        "name": name,
+                        "price": price_val,
                         "url": link
                     })
 
@@ -109,16 +105,17 @@ def get_cheapest_ram(max_retries=3):
                     continue
             
             if not candidates:
-                print("No valid candidates after filtering.")
+                print("No valid candidates found.")
                 return None
-            
+                
+            # Sort strictly by price
             candidates.sort(key=lambda x: x['price'])
             
-            print(f"--- Top 5 Candidates (Residential Run) ---")
+            print(f"--- Top 5 Candidates (Newegg) ---")
             for i, c in enumerate(candidates[:5], 1):
-                print(f"#{i}: ${c['price']:.2f} - {c['name']}")
-            print("------------------------------------------\n")
-
+                print(f"#{i}: ${c['price']:.2f} - {c['name'][:40]}...")
+            print("-----------------------------------")
+            
             return candidates[0]
 
         except Exception as e:
@@ -163,9 +160,9 @@ def post_to_discord(item, avg_price, trend, days_tracked):
         "username": "RAM Bot",
         "embeds": [
             {
-                "title": "Daily RAM Deal (32GB DDR5 6000+ CL30)",
-                "description": "Cheapest kit on PCPartPicker (CA).",
-                "color": 5814783,
+                "title": "Daily RAM Deal (Newegg CA)",
+                "description": "Cheapest 32GB DDR5 kit found.",
+                "color": 16750848, # Newegg Orange
                 "fields": [
                     {
                         "name": "Product", 
@@ -200,7 +197,7 @@ def post_to_discord(item, avg_price, trend, days_tracked):
         print(f"Discord Error: {e}")
 
 if __name__ == "__main__":
-    print("Starting Bot (OPTION A: TRUE RESIDENTIAL MODE)...")
+    print("Starting Bot (Target: Newegg Canada)...")
     deal = get_cheapest_ram()
 
     if deal:
