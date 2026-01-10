@@ -2,7 +2,7 @@
 
 
 
-Checks for the cheapest ddr5 ram kit on pcpartpicker canada every day. posts to discord. 2x16GB 6000 MHz and CL30 or faster.
+Checks for the cheapest ddr5 ram kit on pcpartpicker and newegg (canada) every day. posts to discord. 2x16GB 6000 MHz and CL30 or faster.
 
 
 
@@ -42,5 +42,6 @@ Checks for the cheapest ddr5 ram kit on pcpartpicker canada every day. posts to 
 
 it crashes sometimes because scraperapi times out. added a retry loop so it should be fine. if it breaks, god bless.
 
+do not use selenium unless you want to get IP banned
 
 
