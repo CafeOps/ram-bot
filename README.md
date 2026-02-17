@@ -40,7 +40,7 @@ Checks for the cheapest ddr5 ram kit on pcpartpicker and newegg (canada) every d
 
 ### Disclaimer
 
-it crashes sometimes because scraperapi times out. added a retry loop so it should be fine. if it breaks, god bless.
+if it breaks, god bless.
 
 do not use selenium unless you want to get IP banned
 
